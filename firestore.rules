@@ -2,29 +2,40 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
+    function room(r) { return /databases/$(database)/documents/rooms/$(r); }
     function isMember(r) { return signedIn() && exists(/databases/$(database)/documents/rooms/$(r)/members/$(request.auth.uid)); }
     function willBeMember(r) { return signedIn() && existsAfter(/databases/$(database)/documents/rooms/$(r)/members/$(request.auth.uid)); }
+    function isOwner(r) { return signedIn() && get(room(r)).data.createdBy == request.auth.uid; }
 
     match /rooms/{r} {
       allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid;
-      allow read, update: if isMember(r);
+      allow read: if isMember(r);
+      allow update: if isOwner(r);
 
       match /members/{u} {
         allow read: if isMember(r) || (signedIn() && request.auth.uid == u);
-        allow create: if signedIn() && request.auth.uid == u && (
-          getAfter(/databases/$(database)/documents/rooms/$(r)).data.createdBy == u ||
+        allow create: if signedIn() && request.auth.uid == u && request.resource.data.xp == 0 && (
+          getAfter(room(r)).data.createdBy == u ||
           get(/databases/$(database)/documents/rooms/$(r)/invites/$(request.resource.data.token)).data.active == true);
+        allow update: if isOwner(r) || (signedIn() && request.auth.uid == u &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','avatar']));
       }
       match /invites/{t} {
         allow get: if signedIn();
-        allow create, update, delete: if willBeMember(r);
+        allow create: if willBeMember(r);
+        allow update, delete: if isOwner(r);
       }
-      match /log/{l} {
-        allow read, create: if isMember(r);
+      match /tasks/{t} {
+        allow read: if isOwner(r) || (isMember(r) && resource.data.assignee == request.auth.uid);
+        allow create: if isOwner(r) && request.resource.data.status == 'todo';
+        allow delete: if isOwner(r);
+        allow update: if isOwner(r) || (isMember(r) && resource.data.assignee == request.auth.uid
+          && resource.data.status in ['todo','rejected']
+          && request.resource.data.status == 'submitted'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','proof']));
       }
     }
-    match /users/{u}/rooms/{r} {
-      allow read, write: if signedIn() && request.auth.uid == u;
-    }
+    match /users/{u} { allow read, write: if signedIn() && request.auth.uid == u; }
+    match /users/{u}/rooms/{r} { allow read, write: if signedIn() && request.auth.uid == u; }
   }
 }
