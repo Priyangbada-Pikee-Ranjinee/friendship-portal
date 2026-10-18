@@ -8,6 +8,17 @@ const AVATARS = ["👑", "🦄", "🐱", "🦊", "🐼", "🐸", "🦋", "🌸",
 let user = null, prof = { avatar: "👑" }, unsubs = [], params = new URLSearchParams(location.search), mode = "login";
 
 const $ = s => root.querySelector(s);
+document.addEventListener("click", e => { const i = e.target.closest("img.ph"); if (i) i.classList.toggle("zoom"); });
+const shrink = file => new Promise((ok, no) => {
+  const img = new Image(), u = URL.createObjectURL(file);
+  img.onload = () => {
+    let m = 900, q = 0.72, out; const c = document.createElement("canvas"), x = c.getContext("2d");
+    do { const k = Math.min(1, m / Math.max(img.width, img.height)); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      x.drawImage(img, 0, 0, c.width, c.height); out = c.toDataURL("image/jpeg", q); m *= 0.8; q = Math.max(0.4, q - 0.08); } while (out.length > 700000 && m > 200);
+    URL.revokeObjectURL(u); out.length > 850000 ? no(new Error("Photo is too large, try another one")) : ok(out);
+  };
+  img.onerror = () => no(new Error("That file is not a valid image")); img.src = u;
+});
 const toast = m => { const t = document.querySelector("#toast"); t.textContent = m; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 3200); };
 const clean = () => { unsubs.forEach(u => u()); unsubs = []; };
 const rankIdx = xp => STEPS.reduce((r, s, i) => xp >= s ? i : r, 0);
@@ -61,7 +72,7 @@ function authView() {
   };
 }
 
-const topbar = () => `<div class="row between"><button class="alt" id="meb"><span class="av s">${esc(prof.avatar || "👑")}</span> ${esc(myName())}</button>
+const topbar = () => `<div class="row between"><button class="alt" id="meb"><span class="av s">${esc(prof.avatar || "👑")}</span> My profile</button>
   <span class="row"><button class="alt" id="home">Home</button><button class="alt" id="out">Log out</button></span></div>`;
 const bindTop = () => { $("#meb").onclick = () => go("?profile=1"); $("#home").onclick = () => go(); $("#out").onclick = () => A.signOut(auth); };
 
@@ -120,20 +131,22 @@ function homeView() {
 /* ---------- ROOM ---------- */
 function roomView(id) {
   root.innerHTML = `${topbar()}<p class="muted center">Loading room…</p>`; bindTop();
-  let room = null, members = [], tasks = [], prev = null, owner = false, built = false;
+  let room = null, members = [], tasks = [], prev = null, owner = false, built = false, selId = null, proofs = {};
   const fail = () => { root.innerHTML = `${topbar()}<p class="card err">Room not found or you're not a member.</p>`; bindTop(); };
 
   const build = () => {
     built = true; owner = room.createdBy === user.uid;
     const link = `${location.origin}${location.pathname}?join=${id}&t=${room.inviteToken}`;
     root.innerHTML = `${topbar()}<h1>${esc(room.title)}</h1>
-    <div id="mine"></div>
+    <div id="mine"></div><div id="pview"></div>
     ${owner ? `<form class="card" id="af"><h3>Assign a mission</h3>
       <label>Task to prove loyalty<input id="tt" required maxlength="80" placeholder="Send me a voice note cheering me up"></label>
       <div class="row"><label style="flex:1">Assign to<select id="sel"></select></label><label style="flex:1">XP reward<input id="tx" type="number" min="1" max="100" value="20"></label></div>
       <button class="gold">Assign mission</button></form>` : ""}
     <div class="card"><h3>${owner ? "Review proof" : "My missions"}</h3><div id="tasks"></div></div>
-    <div class="card"><h3>Friends & ranks</h3><div id="board"></div></div>
+    <div class="card"><h3>Mission table</h3><div id="tbl" class="scroll"></div></div>
+    <div class="card"><h3>Friends, levels & profiles <small class="muted">(tap one)</small></h3><div id="board"></div></div>
+    <div class="card"><h3>Rank ladder</h3><ol class="ladder" id="ladder"></ol></div>
     ${owner ? `<div class="card"><h3>Invite a friend</h3><input readonly value="${esc(link)}"><div class="row"><button id="cp">Copy link</button><button class="alt" id="rv">Revoke invite</button></div></div>` : ""}`;
     bindTop();
     if (owner) {
@@ -149,22 +162,32 @@ function roomView(id) {
         try { await b.commit(); $("#tt").value = ""; toast("Mission assigned 🎯"); } catch (x) { toast(x.message); }
       };
     }
-    $("#tasks").onclick = async e => {
+    const act = async e => {
       const b = e.target.closest("[data-act]"); if (!b) return;
       const t = tasks.find(x => x.id === b.dataset.id), ref = F.doc(db, "rooms", id, "tasks", b.dataset.id);
       try {
         if (b.dataset.act === "sub") {
-          const proof = document.getElementById("p_" + t.id).value.trim();
-          if (!proof) return toast("Write your proof first ✍️");
-          await F.updateDoc(ref, { status: "submitted", proof }); toast("Proof sent! Waiting for approval ⏳");
+          const f = document.getElementById("f_" + t.id).files[0], proof = document.getElementById("p_" + t.id).value.trim();
+          if (!f) return toast("Attach a photo as proof 📸");
+          if (proof.length < 3) return toast("Add a short description ✍️");
+          b.disabled = true; b.textContent = "Uploading…";
+          const photo = await shrink(f), w = F.writeBatch(db);
+          w.set(F.doc(db, "rooms", id, "proofs", t.id), { photo, by: user.uid, at: F.serverTimestamp() });
+          w.update(ref, { status: "submitted", proof }); await w.commit(); toast("Proof sent! Waiting for approval ⏳");
         } else if (b.dataset.act === "ok") {
           const w = F.writeBatch(db); w.update(ref, { status: "approved" });
           w.update(F.doc(db, "rooms", id, "members", t.assignee), { xp: F.increment(t.xp) }); await w.commit(); toast(`Approved +${t.xp} XP ✅`);
         } else if (b.dataset.act === "no") await F.updateDoc(ref, { status: "rejected" });
-        else if (b.dataset.act === "del") await F.deleteDoc(ref);
-      } catch (x) { toast(x.message); }
+        else if (b.dataset.act === "del") { const w = F.writeBatch(db); w.delete(ref); w.delete(F.doc(db, "rooms", id, "proofs", t.id)); await w.commit(); }
+      } catch (x) { toast(x.message); paint(); }
     };
-    const tq = owner ? F.collection(db, "rooms", id, "tasks") : F.query(F.collection(db, "rooms", id, "tasks"), F.where("assignee", "==", user.uid));
+    $("#tasks").onclick = act; $("#tbl").onclick = act;
+    $("#board").onclick = e => { const r = e.target.closest("[data-m]"); if (r) { selId = r.dataset.m; paint(); $("#pview").scrollIntoView({ behavior: "smooth" }); } };
+    $("#pview").onclick = e => { if (e.target.closest("[data-close]")) { selId = null; paint(); } else if (e.target.closest("[data-edit]")) go("?profile=1"); };
+    const tq = F.collection(db, "rooms", id, "tasks");
+    if (owner) unsubs.push(F.onSnapshot(F.collection(db, "rooms", id, "proofs"), s => {
+      proofs = {}; s.docs.forEach(d => { const ph = d.data().photo; if (typeof ph === "string" && ph.startsWith("data:image/jpeg;base64,")) proofs[d.id] = ph; }); paint();
+    }));
     unsubs.push(F.onSnapshot(tq, s => { tasks = s.docs.map(d => ({ id: d.id, ...d.data() })); paint(); }));
   };
 
@@ -181,26 +204,49 @@ function roomView(id) {
     } else $("#mine").innerHTML = `<div class="card center"><div class="av big">${esc(prof.avatar || "👑")}</div><b>You are the Room Owner 👑</b><br><small class="muted">Assign missions, then approve or send back the proof.</small></div>`;
 
     const fr = members.filter(m => m.id !== room.createdBy).sort((a, b) => (b.xp || 0) - (a.xp || 0));
-    $("#board").innerHTML = fr.length ? fr.map(m => {
-      const k = rankIdx(m.xp || 0), mt = tasks.filter(t => t.assignee === m.id), done = mt.filter(t => t.status === "approved").length, pend = mt.filter(t => t.status === "submitted").length;
-      return `<div class="mem"><span class="av">${esc(m.avatar || "👑")}</span><div style="flex:1"><b>${esc(m.name)}</b><br><small class="muted">${esc(room.ranks[k])} · ${m.xp || 0} XP</small></div>
-        ${owner ? `<span class="badge">${done}/${mt.length} done${pend ? ` · ${pend} to review` : ""}</span>` : ""}</div>`;
-    }).join("") : `<p class="muted">No friends have joined yet — share the invite link!</p>`;
+    const row = m => {
+      const x = m.xp || 0, k = rankIdx(x), nx = STEPS[k + 1], pc = nx ? Math.round((x - STEPS[k]) / (nx - STEPS[k]) * 100) : 100;
+      const mt = tasks.filter(t => t.assignee === m.id), dn = mt.filter(t => t.status === "approved").length, pn = mt.filter(t => t.status === "submitted").length;
+      return `<div class="mem click" data-m="${m.id}"><span class="av">${esc(m.avatar || "👑")}</span><div style="flex:1"><b>${esc(m.name)}</b> <small class="muted">${esc(room.ranks[k])} · ${x} XP</small>
+        <div class="bar sm"><i style="width:${pc}%"></i></div><small class="muted">${nx ? `${nx - x} XP to ${esc(room.ranks[k + 1])}` : "Max rank 👑"} · ${dn}/${mt.length} missions${pn ? ` · ${pn} to review` : ""}</small></div></div>`;
+    };
+    const ow = members.find(m => m.id === room.createdBy);
+    $("#board").innerHTML = (ow ? `<div class="mem click" data-m="${ow.id}"><span class="av">${esc(ow.avatar || "👑")}</span><div style="flex:1"><b>${esc(ow.name)}</b> <span class="badge">Room Owner 👑</span></div></div>` : "") +
+      (fr.length ? fr.map(row).join("") : `<p class="muted">No friends have joined yet — share the invite link!</p>`);
+    const order = { submitted: 0, todo: 1, rejected: 2, approved: 3 }, dnAll = tasks.filter(t => t.status === "approved").length;
+    $("#tbl").innerHTML = tasks.length ? `<small class="muted">Room progress: ${dnAll}/${tasks.length} missions complete</small><div class="bar sm"><i style="width:${Math.round(dnAll / tasks.length * 100)}%"></i></div>
+      <table><thead><tr><th>Friend</th><th>Mission</th><th>XP</th><th>Status</th>${owner ? "<th></th>" : ""}</tr></thead><tbody>` +
+      [...tasks].sort((a, b) => order[a.status] - order[b.status]).map(t => `<tr><td>${esc(members.find(m => m.id === t.assignee)?.avatar || "👑")} ${esc(t.assigneeName)}</td><td>${esc(t.title)}</td><td>${t.xp}</td>
+        <td><span class="badge ${t.status}">${t.status === "approved" ? "✅ done" : t.status}</span></td>${owner ? `<td>${t.status !== "approved" ? `<button class="alt" data-act="del" data-id="${t.id}">✕</button>` : ""}</td>` : ""}</tr>`).join("") + `</tbody></table>`
+      : `<p class="muted">No missions assigned yet.</p>`;
+    const pm = selId && members.find(m => m.id === selId);
+    $("#pview").innerHTML = pm ? (() => {
+      const isO = pm.id === room.createdBy, x = pm.xp || 0, k = rankIdx(x), nx = STEPS[k + 1], pc = nx ? Math.round((x - STEPS[k]) / (nx - STEPS[k]) * 100) : 100, mt = tasks.filter(t => t.assignee === pm.id);
+      return `<div class="card center"><div class="av big">${esc(pm.avatar || "👑")}</div><h2>${esc(pm.name)}</h2>` + (isO ? `<p class="muted">Room Owner 👑 · ${tasks.length} missions assigned</p>` :
+        `<div class="rank">${esc(room.ranks[k])}</div><div class="stars">⭐ ${x} XP</div><div class="bar"><i style="width:${pc}%"></i></div>
+        <p class="muted">${mt.filter(t => t.status === "approved").length}/${mt.length} missions complete</p>
+        <ol class="log" style="text-align:left">${mt.map(t => `<li>${t.status === "approved" ? "✅" : t.status === "submitted" ? "⏳" : "🎯"} ${esc(t.title)} <span class="badge ${t.status}">${t.status}</span></li>`).join("")}</ol>`) +
+        `<div class="row" style="justify-content:center">${pm.id === user.uid ? `<button data-edit>Edit my profile</button>` : ""}<button class="alt" data-close>Close</button></div></div>`;
+    })() : "";
+    $("#ladder").innerHTML = room.ranks.map((n, k) => {
+      const here = fr.filter(m => rankIdx(m.xp || 0) === k);
+      return `<li class="${!owner && k === i ? "on" : ""}"><span>${k + 1}. ${esc(n)} ${here.map(m => esc(m.avatar || "👑")).join(" ")}</span><span>${STEPS[k]} XP</span></li>`;
+    }).join("");
 
     if (owner) {
       const sel = $("#sel"), v = sel.value;
       sel.innerHTML = `<option value="all">Everyone</option>` + fr.map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join("");
       if ([...sel.options].some(o => o.value === v)) sel.value = v;
-      const pend = tasks.filter(t => t.status === "submitted"), rest = tasks.filter(t => t.status !== "submitted");
+      const pend = tasks.filter(t => t.status === "submitted");
       $("#tasks").innerHTML = (pend.length ? pend.map(t => `<div class="task"><b>${esc(t.title)}</b> <span class="badge">+${t.xp} XP</span><br>
-        <small class="muted">${esc(t.assigneeName)} says:</small> “${esc(t.proof)}”<div class="row" style="margin-top:8px"><button data-act="ok" data-id="${t.id}">Approve</button><button class="alt" data-act="no" data-id="${t.id}">Send back</button></div></div>`).join("")
-        : `<p class="muted">Nothing waiting for review.</p>`) +
-        (rest.length ? `<h3 style="margin-top:16px">All missions</h3>` + rest.map(t => `<div class="row between task"><span>${esc(t.assigneeName)} — ${esc(t.title)} <span class="badge ${t.status}">${t.status}</span></span>${t.status !== "approved" ? `<button class="alt" data-act="del" data-id="${t.id}">Remove</button>` : ""}</div>`).join("") : "");
+        <small class="muted">${esc(t.assigneeName)} says:</small> “${esc(t.proof)}”<br>${proofs[t.id] ? `<img class="ph" src="${proofs[t.id]}" alt="proof photo">` : `<small class="muted">(loading photo…)</small>`}<div class="row" style="margin-top:8px"><button data-act="ok" data-id="${t.id}">Approve</button><button class="alt" data-act="no" data-id="${t.id}">Send back</button></div></div>`).join("")
+        : `<p class="muted">Nothing waiting for review.</p>`);
     } else {
-      $("#tasks").innerHTML = tasks.length ? tasks.map(t => t.status === "approved" ? `<div class="task">✅ ${esc(t.title)} <span class="badge approved">+${t.xp} XP earned</span></div>`
+      const mine = tasks.filter(t => t.assignee === user.uid);
+      $("#tasks").innerHTML = mine.length ? mine.map(t => t.status === "approved" ? `<div class="task">✅ ${esc(t.title)} <span class="badge approved">+${t.xp} XP earned</span></div>`
         : t.status === "submitted" ? `<div class="task">⏳ ${esc(t.title)} <span class="badge submitted">waiting for approval</span></div>`
         : `<div class="task"><b>🎯 ${esc(t.title)}</b> <span class="badge">+${t.xp} XP</span>${t.status === "rejected" ? `<br><small class="err">Sent back — try again with better proof.</small>` : ""}
-          <textarea id="p_${t.id}" rows="2" placeholder="Describe how you completed it (or paste a link)"></textarea><button data-act="sub" data-id="${t.id}">Submit proof</button></div>`).join("")
+          <label>📸 Photo proof (required)<input type="file" accept="image/*" id="f_${t.id}"></label><label>Description (required)<textarea id="p_${t.id}" rows="2" placeholder="Explain how you completed this mission"></textarea></label><button data-act="sub" data-id="${t.id}">Submit proof</button></div>`).join("")
         : `<p class="muted">No missions yet. The Room Owner will assign your tasks soon!</p>`;
     }
   };
