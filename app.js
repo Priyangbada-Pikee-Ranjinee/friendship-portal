@@ -31,7 +31,7 @@ function route() {
 function authView() {
   const signup = mode === "signup";
   root.innerHTML = `<h1>👑 Friendship Loyalty Game</h1>
-  <p class="center muted">Earn loyalty stars, climb the ranks, reach Soul Sister. 💗</p>
+  <p class="center muted">Earn XP, level up the ranks, reach Soul Sister. 💗</p>
   <form class="card" id="f">
     <h2>${signup ? "Create account" : "Welcome back"}</h2>
     ${signup ? `<label>Your name<input id="n" required maxlength="30"></label>` : ""}
@@ -98,21 +98,21 @@ function roomView(id) {
     if (!snap.exists()) { root.innerHTML = `${topbar()}<p class="card err">Room not found or you're not a member.</p>`; return bindTop(); }
     const r = snap.data(), i = rankIdx(r.stars), next = STEPS[i + 1];
     document.body.dataset.theme = r.theme;
-    if (prev !== null && i > prev) toast(`🎉 Rank up! ${r.ranks[i]}`);
+    if (prev !== null && i > prev) toast(`🎮 LEVEL UP! ${r.ranks[i]}`);
     prev = i;
     const pct = next ? Math.round((r.stars - STEPS[i]) / (next - STEPS[i]) * 100) : 100;
     const link = `${location.origin}${location.pathname}?join=${id}&t=${r.inviteToken}`;
     root.innerHTML = `${topbar()}<h1>${esc(r.title)}</h1>
-    <div class="card center"><div class="rank">${esc(r.ranks[i])}</div><div class="stars">⭐ ${r.stars} loyalty stars</div>
+    <div class="card center"><div class="rank">${esc(r.ranks[i])}</div><div class="stars">⭐ ${r.stars} XP</div>
       <div class="bar"><i style="width:${pct}%"></i></div>
-      <small class="muted">${next ? `${next - r.stars} stars to ${esc(r.ranks[i + 1])}` : "Highest rank reached 👑"}</small></div>
-    <div class="card"><h3>Loyalty quests</h3><div class="quests">${r.quests.map((q, n) => `<button class="quest" data-q="${n}">${esc(q.t)} <b>+${q.s}</b></button>`).join("")}</div>
-      <form class="row" id="cq" style="margin-top:12px"><input id="qt" placeholder="Custom quest" required maxlength="50" style="flex:3"><input id="qs" type="number" min="1" max="100" value="10" style="flex:1"><button class="gold">Add</button></form></div>
+      <small class="muted">${next ? `${next - r.stars} XP to ${esc(r.ranks[i + 1])}` : "Highest rank reached 👑"}</small></div>
+    <div class="card"><h3>Missions</h3><div class="quests">${r.quests.map((q, n) => `<button class="quest" data-q="${n}">${esc(q.t)} <b>+${q.s}</b></button>`).join("")}</div>
+      <form class="row" id="cq" style="margin-top:12px"><input id="qt" placeholder="Custom mission" required maxlength="50" style="flex:3"><input id="qs" type="number" min="1" max="100" value="10" style="flex:1"><button class="gold">Add</button></form></div>
     <div class="card"><h3>Rank ladder</h3><ol class="ladder">${r.ranks.map((n, k) => `<li class="${k === i ? "on" : ""}"><span>${k + 1}. ${esc(n)}</span><span>${STEPS[k]} ⭐</span></li>`).join("")}</ol></div>
     <div class="card"><h3>Invite a friend</h3><input readonly id="lk" value="${esc(link)}">
       <div class="row"><button id="cp">Copy link</button><button class="alt" id="rv">Revoke invite</button></div>
       <p class="muted" id="mem"></p></div>
-    <div class="card"><h3>Friendship chronicle</h3><ol class="log" id="log"><li class="muted">Loading…</li></ol></div>`;
+    <div class="card"><h3>Battle log</h3><ol class="log" id="log"><li class="muted">Loading…</li></ol></div>`;
     bindTop();
     root.querySelectorAll("[data-q]").forEach(b => b.onclick = () => award(id, r.quests[b.dataset.q]));
     $("#cq").onsubmit = async e => { e.preventDefault(); await F.updateDoc(F.doc(db, "rooms", id), { quests: F.arrayUnion({ t: $("#qt").value.trim(), s: Math.min(100, Math.max(1, +$("#qs").value || 10)) }) }); };
@@ -121,8 +121,8 @@ function roomView(id) {
   }, () => { root.innerHTML = `${topbar()}<p class="card err">You don't have access to this room.</p>`; bindTop(); }));
   unsubs.push(F.onSnapshot(F.collection(db, "rooms", id, "members"), s => { const m = $("#mem"); if (m) m.textContent = "Members: " + s.docs.map(d => d.data().name).join(", "); }));
   unsubs.push(F.onSnapshot(F.query(F.collection(db, "rooms", id, "log"), F.orderBy("at", "desc"), F.limit(30)), s => {
-    const l = $("#log"); if (l) l.innerHTML = s.empty ? `<li class="muted">No moments yet.</li>` :
-      s.docs.map(d => { const x = d.data(); return `<li>⭐ +${x.stars} — ${esc(x.text)} <small class="muted">· ${esc(x.by)}</small></li>`; }).join("");
+    const l = $("#log"); if (l) l.innerHTML = s.empty ? `<li class="muted">No battles yet.</li>` :
+      s.docs.map(d => { const x = d.data(); return `<li>⭐ +${x.stars} XP — ${esc(x.text)} <small class="muted">· ${esc(x.by)}</small></li>`; }).join("");
   }));
 }
 
@@ -143,7 +143,7 @@ async function joinView() {
     const inv = await F.getDoc(F.doc(db, "rooms", id, "invites", token));
     if (!inv.exists() || !inv.data().active) throw new Error("bad");
     const title = inv.data().title;
-    root.innerHTML = `${topbar()}<div class="card center"><h2>You're invited! 💌</h2><p>Join <b>${esc(title)}</b> and start earning loyalty stars together.</p><button id="j">Join friendship</button><p class="err" id="err"></p></div>`; bindTop();
+    root.innerHTML = `${topbar()}<div class="card center"><h2>You're invited! 💌</h2><p>Join <b>${esc(title)}</b> and start earning XP together.</p><button id="j">Join the party</button><p class="err" id="err"></p></div>`; bindTop();
     $("#j").onclick = async () => {
       const b = F.writeBatch(db);
       b.set(F.doc(db, "rooms", id, "members", user.uid), { name: user.displayName || "Friend", token });
