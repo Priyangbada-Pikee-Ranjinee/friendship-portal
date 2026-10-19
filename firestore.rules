@@ -19,12 +19,16 @@ service cloud.firestore {
           get(/databases/$(database)/documents/rooms/$(r)/invites/$(request.resource.data.token)).data.active == true);
         allow update: if isOwner(r) || (signedIn() && request.auth.uid == u &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','avatar']));
-        allow delete: if isOwner(r);
+        allow delete: if isOwner(r) || (signedIn() && request.auth.uid == u && get(room(r)).data.createdBy != u);
       }
       match /invites/{t} {
         allow get: if signedIn();
         allow create: if willBeMember(r);
         allow update, delete: if isOwner(r);
+      }
+      match /races/{g} {
+        allow read: if isMember(r);
+        allow write: if isOwner(r);
       }
       match /secrets/{t} {
         allow read, write: if isOwner(r);
