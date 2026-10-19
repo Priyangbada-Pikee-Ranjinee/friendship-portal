@@ -205,10 +205,16 @@ function drawCandy(t) {
 function roomView(id) {
   root.innerHTML = `${topbar()}<p class="muted center">Loading room…</p>`; bindTop();
   let room = null, members = [], tasks = [], proofs = {}, secrets = {}, prev = null, owner = false, built = false;
-  let selId = null, openId = null, drafts = {}, seen = null, sig = "";
+  let selId = null, openId = null, drafts = {}, seen = null, sig = "", lib = [];
   game = null;
   const fail = () => { F.deleteDoc(F.doc(db, "users", user.uid, "rooms", id)).catch(() => {}); root.innerHTML = `${topbar()}<p class="card err">Room not found or you're not a member.</p>`; bindTop(); };
   const taskById = tid => tasks.find(x => x.id === tid);
+  const paintLib = () => {
+    const el = $("#lib"); if (!el) return;
+    el.innerHTML = lib.length ? lib.map(t => `<div class="mem"><div style="flex:1"><b>${ICON[t.type || "text"]} ${esc(t.title)}</b> <span class="badge">+${t.xp} XP</span>${t.desc ? `<br><small class="muted">${esc(t.desc.slice(0, 90))}${t.desc.length > 90 ? "…" : ""}</small>` : ""}</div>
+      <button data-use="${t.id}">Use</button><button class="alt" data-del="${t.id}">✕</button></div>`).join("")
+      : `<p class="muted">No saved missions yet. Tick "Also save to my library" when you assign one, or tap 💾 Save to library.</p>`;
+  };
   const THEMES = [["rose", "Neon Pink"], ["lavender", "Purple"], ["ocean", "Ocean Blue"], ["sage", "Green"]];
 
   const flip = n => {
@@ -271,7 +277,9 @@ function roomView(id) {
       <div id="cn" hidden class="row"><label style="flex:1">Target score<input id="cg" type="number" min="50" max="2000" value="300"></label><label style="flex:1">Moves allowed<input id="cm" type="number" min="5" max="60" value="20"></label></div>
       <div class="row"><label style="flex:1">Assign to<select id="sel"></select></label><label style="flex:1">XP reward<input id="tx" type="number" min="1" max="100" value="20"></label></div>
       <label>Deadline (optional)<input id="dl" type="datetime-local"></label>
-      <button class="gold">Assign mission</button></form>
+      <label class="opt"><input type="checkbox" id="sk"> Also save this mission to my library</label>
+      <div class="row"><button class="gold">Assign mission</button><button type="button" class="alt" id="sv">💾 Save to library</button></div></form>
+    <div class="card"><h3>📚 My mission library</h3><p class="muted">Saved missions work in every room. Tap Use to fill the form, then pick who gets it.</p><div id="lib"></div></div>
     <form class="card" id="ef"><h3>Edit room</h3><label>Room title<input id="et" required maxlength="40" value="${esc(room.title)}"></label>
       <label>Theme<select id="eth">${THEMES.map(([v, n]) => `<option value="${v}" ${v === room.theme ? "selected" : ""}>${n}</option>`).join("")}</select></label>
       <label>7 rank names, comma-separated<textarea id="er" rows="2">${esc(room.ranks.join(", "))}</textarea></label><p class="err" id="eerr"></p><button>Save changes</button></form>` : ""}
@@ -311,28 +319,52 @@ function roomView(id) {
         $("#eerr").textContent = "";
         try { await F.updateDoc(F.doc(db, "rooms", id), { title: $("#et").value.trim(), theme: $("#eth").value, ranks }); toast("Room updated ✨"); } catch (x) { toast(x.message); }
       };
-      $("#af").onsubmit = async e => {
-        e.preventDefault();
-        const type = $("#ty").value, sel = $("#sel").value, fr = members.filter(m => m.id !== room.createdBy);
-        const targets = sel === "all" ? fr : fr.filter(m => m.id === sel);
-        if (!targets.length) return toast("Invite a friend first 💌");
-        const title = $("#tt").value.trim(), xp = Math.min(100, Math.max(1, +$("#tx").value || 20)), dl = $("#dl").value ? new Date($("#dl").value).getTime() : 0;
-        const desc = $("#td").value.trim();
-        if (type === "text" && wc(desc) < 5) return toast("Explain the mission in at least 5 words ✍️");
+      const readMission = () => {
+        const type = $("#ty").value, title = $("#tt").value.trim(), desc = $("#td").value.trim();
+        const xp = Math.min(100, Math.max(1, +$("#tx").value || 20)), dl = $("#dl").value ? new Date($("#dl").value).getTime() : 0;
+        if (!title) { toast("Give the mission a title ✍️"); return null; }
+        if (type === "text" && wc(desc) < 5) { toast("Explain the mission in at least 5 words ✍️"); return null; }
         let extra = {}, answer = 0;
         if (type === "quiz") {
-          const options = [...root.querySelectorAll(".qo")].map(i => i.value.trim()), question = $("#qq").value.trim();
-          if (!question || options.some(o => !o)) return toast("Fill in the question and all 4 options ❓");
+          const options = [...root.querySelectorAll(".qo")].map(x => x.value.trim()), question = $("#qq").value.trim();
+          if (!question || options.some(o => !o)) { toast("Fill in the question and all 4 options ❓"); return null; }
           extra = { question, options }; answer = +$("#qa").value;
         } else if (type === "candy") extra = { goal: Math.min(2000, Math.max(50, +$("#cg").value || 300)), moves: Math.min(60, Math.max(5, +$("#cm").value || 20)) };
+        return { type, title, desc, xp, dl, extra, answer };
+      };
+      const tpl = m => ({ title: m.title, type: m.type, xp: m.xp, desc: m.desc, ...m.extra, ...(m.type === "quiz" ? { answer: m.answer } : {}), saved: F.serverTimestamp() });
+      $("#sv").onclick = async () => {
+        const m = readMission(); if (!m) return;
+        try { await F.addDoc(F.collection(db, "users", user.uid, "templates"), tpl(m)); toast("Saved to your library 📚"); } catch (x) { toast(x.message); }
+      };
+      $("#lib").onclick = async e => {
+        const u = e.target.closest("[data-use]"), d = e.target.closest("[data-del]");
+        if (d) { try { await F.deleteDoc(F.doc(db, "users", user.uid, "templates", d.dataset.del)); } catch (x) { toast(x.message); } return; }
+        if (!u) return;
+        const t = lib.find(x => x.id === u.dataset.use); if (!t) return;
+        $("#ty").value = t.type || "text"; $("#ty").onchange();
+        $("#tt").value = t.title; $("#td").value = t.desc || ""; $("#td").oninput(); $("#tx").value = t.xp || 20;
+        if (t.type === "quiz") { $("#qq").value = t.question || ""; root.querySelectorAll(".qo").forEach((x, k) => x.value = (t.options || [])[k] || ""); $("#qa").value = t.answer || 0; }
+        if (t.type === "candy") { $("#cg").value = t.goal || 300; $("#cm").value = t.moves || 20; }
+        $("#af").scrollIntoView({ behavior: "smooth" }); toast("Loaded 📚 Choose who gets it, set a deadline, then assign.");
+      };
+      $("#af").onsubmit = async e => {
+        e.preventDefault();
+        const sel = $("#sel").value, fr = members.filter(m => m.id !== room.createdBy);
+        const targets = sel === "all" ? fr : fr.filter(m => m.id === sel);
+        if (!targets.length) return toast("Invite a friend first 💌");
+        const m0 = readMission(); if (!m0) return;
         const b = F.writeBatch(db);
         targets.forEach(m => {
           const ref = F.doc(F.collection(db, "rooms", id, "tasks"));
-          b.set(ref, { title, type, xp, desc, deadline: dl, assignee: m.id, assigneeName: m.name, status: "todo", proof: "", created: F.serverTimestamp(), ...extra });
-          if (type === "quiz") b.set(F.doc(db, "rooms", id, "secrets", ref.id), { answer });
+          b.set(ref, { title: m0.title, type: m0.type, xp: m0.xp, desc: m0.desc, deadline: m0.dl, assignee: m.id, assigneeName: m.name, status: "todo", proof: "", created: F.serverTimestamp(), ...m0.extra });
+          if (m0.type === "quiz") b.set(F.doc(db, "rooms", id, "secrets", ref.id), { answer: m0.answer });
         });
-        try { await b.commit(); $("#tt").value = ""; $("#td").value = ""; $("#tdc").textContent = "0/300 words"; toast("Mission assigned 🎯"); } catch (x) { toast(x.message); }
+        if ($("#sk").checked) b.set(F.doc(F.collection(db, "users", user.uid, "templates")), tpl(m0));
+        try { await b.commit(); $("#tt").value = ""; $("#td").value = ""; $("#tdc").textContent = "0/300 words"; $("#sk").checked = false; toast("Mission assigned 🎯"); } catch (x) { toast(x.message); }
       };
+      paintLib();
+      unsubs.push(F.onSnapshot(F.collection(db, "users", user.uid, "templates"), s => { lib = s.docs.map(d => ({ id: d.id, ...d.data() })); paintLib(); }));
     }
     const act = async e => {
       const cd = e.target.closest("[data-card]");
