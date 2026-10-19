@@ -60,7 +60,7 @@ function popup(o) { popq.push(o); if (!document.querySelector(".pop")) nextPop()
 function nextPop() {
   const o = popq.shift(); if (!o) return;
   const d = document.createElement("div"); d.className = "pop";
-  d.innerHTML = `<div class="popbox ${o.mood || "happy"}">${mascot(o.mood)}<div class="poptag">${esc(o.tag)}</div><h2>${esc(o.title)}</h2><p>${esc(o.text)}</p><button>${esc(o.btn || "Let's go!")}</button></div>`;
+  d.innerHTML = `<div class="popbox ${o.mood || "happy"}">${mascot(o.mood)}<div class="poptag">${esc(o.tag)}</div><h2>${esc(o.title)}</h2><p>${esc(o.text)}</p>${o.desc ? `<div class="desc popdesc">${esc(o.desc)}</div>` : ""}<button>${esc(o.btn || "Let's go!")}</button></div>`;
   d.querySelector("button").onclick = () => { d.remove(); if (o.onOk) o.onOk(); nextPop(); };
   document.body.appendChild(d);
 }
@@ -344,7 +344,7 @@ function roomView(id) {
       try {
         if (a === "start") {
           if (isLate(t)) return toast("⌛ This mission has expired");
-          popup({ mood: "cheer", tag: "MISSION ACCEPTED", title: t.title, text: `${TYPES[t.type || "text"]} · +${t.xp} XP${t.deadline ? ` · Due ${fmtDue(t)}` : ""}. Ready, player?`, btn: "Let's go! ▶", onOk: () => { openId = t.id; game = null; candy = null; sig = ""; paint(); } });
+          popup({ mood: "cheer", tag: "MISSION ACCEPTED", title: t.title, text: `${TYPES[t.type || "text"]} · +${t.xp} XP${t.deadline ? ` · Due ${fmtDue(t)}` : ""}. Ready, player?`, desc: t.desc, btn: "Let's go! ▶", onOk: () => { openId = t.id; game = null; candy = null; sig = ""; paint(); } });
         } else if (a === "sub") {
           const f = document.getElementById("f_" + t.id).files[0], proof = document.getElementById("p_" + t.id).value.trim();
           if (!f) return toast("Attach a photo as proof 📸");
@@ -383,7 +383,7 @@ function roomView(id) {
       }));
       unsubs.push(F.onSnapshot(F.collection(db, "rooms", id, "secrets"), s => { secrets = {}; s.docs.forEach(d => secrets[d.id] = d.data().answer); paint(); }));
     }
-    unsubs.push(F.onSnapshot(F.collection(db, "rooms", id, "tasks"), s => { tasks = s.docs.map(d => ({ id: d.id, ...d.data() })); react(); paint(); }));
+    unsubs.push(F.onSnapshot(F.collection(db, "rooms", id, "tasks"), s => { tasks = s.docs.map(d => ({ id: d.id, ...d.data() })); react(); notifyNew(); paint(); }));
   };
 
   const react = () => {
@@ -391,19 +391,30 @@ function roomView(id) {
     if (seen) tasks.forEach(t => {
       const was = seen[t.id], ty = t.type || "text";
       if (!owner && t.assignee === user.uid) {
-        if (was === undefined) popup({ mood: "happy", tag: "NEW MISSION!", title: t.title, text: `${TYPES[ty]} · +${t.xp} XP${t.deadline ? ` · Due ${fmtDue(t)}` : ""}`, btn: "On it! 💪" });
-        else if (was === "submitted" && t.status === "approved") popup({ mood: "cheer", tag: "MISSION COMPLETE!", title: "Yes! You did it! 🎉", text: `You successfully completed “${t.title}” and earned +${t.xp} XP!`, btn: "Yay! ✨" });
+        if (was === "submitted" && t.status === "approved") popup({ mood: "cheer", tag: "MISSION COMPLETE!", title: "Yes! You did it! 🎉", text: `You successfully completed “${t.title}” and earned +${t.xp} XP!`, btn: "Yay! ✨" });
         else if (was === "submitted" && t.status === "rejected") popup({ mood: "sad", tag: "TRY AGAIN", title: "Oh no… sent back!", text: `“${t.title}” needs another try. You've got this!`, btn: "Retry 🔁" });
       } else if (owner && t.status === "submitted" && was !== "submitted") toast(`📬 ${t.assigneeName} sent proof for “${t.title}”`);
     });
     seen = cur;
   };
 
+  const notifyNew = () => {
+    if (owner) return;
+    const key = `seenTasks_${user.uid}_${id}`; let known;
+    try { known = JSON.parse(localStorage.getItem(key) || "[]"); } catch { known = []; }
+    const fresh = tasks.filter(t => t.assignee === user.uid && t.status === "todo" && !isLate(t) && !known.includes(t.id));
+    if (!fresh.length) return;
+    try { localStorage.setItem(key, JSON.stringify([...known, ...fresh.map(t => t.id)])); } catch {}
+    if (fresh.length === 1) { const t = fresh[0]; popup({ mood: "happy", tag: "NEW MISSION!", title: t.title, text: `${TYPES[t.type || "text"]} · +${t.xp} XP${t.deadline ? ` · Due ${fmtDue(t)}` : ""}`, desc: t.desc, btn: "On it! 💪" }); }
+    else popup({ mood: "happy", tag: "NEW MISSIONS!", title: `${fresh.length} new missions`, text: fresh.map(t => `• ${t.title} (+${t.xp} XP)`).join("\n"), btn: "On it! 💪" });
+  };
+
   const friendCard = t => {
+    const more = t.desc ? `<details><summary>📖 Instructions</summary><div class="desc">${esc(t.desc)}</div></details>` : "";
     const ty = t.type || "text", due = t.deadline ? `<span class="badge ${isLate(t) ? "rejected" : "todo"}">⏰ ${esc(fmtDue(t))}</span>` : "";
-    if (t.status === "approved") return `<div class="task">✅ ${esc(t.title)} <span class="badge approved">+${t.xp} XP earned</span></div>`;
-    if (t.status === "submitted") return `<div class="task">⏳ ${esc(t.title)} <span class="badge submitted">waiting for approval</span></div>`;
-    if (isLate(t)) return `<div class="task locked">⌛ ${esc(t.title)} ${due}<br><small class="err">Mission expired.</small></div>`;
+    if (t.status === "approved") return `<div class="task">✅ ${esc(t.title)} <span class="badge approved">+${t.xp} XP earned</span>${more}</div>`;
+    if (t.status === "submitted") return `<div class="task">⏳ ${esc(t.title)} <span class="badge submitted">waiting for approval</span>${more}</div>`;
+    if (isLate(t)) return `<div class="task locked">⌛ ${esc(t.title)} ${due}<br><small class="err">Mission expired.</small>${more}</div>`;
     let body;
     if (openId !== t.id) body = `<button class="gold" data-act="start" data-id="${t.id}">Start mission ▶</button>`;
     else if (ty === "quiz") body = `<p><b>${esc(t.question || "")}</b></p>${(t.options || []).map((o, i) => `<label class="opt"><input type="radio" name="q_${t.id}" value="${i}"> ${"ABCD"[i]}. ${esc(o)}</label>`).join("")}<button data-act="quiz" data-id="${t.id}">Lock in answer</button>`;
@@ -412,7 +423,7 @@ function roomView(id) {
     else body = `<label>📸 Photo proof (required)<input type="file" accept="image/*" id="f_${t.id}"></label>
       <label>Your answer (up to 300 words)<textarea id="p_${t.id}" data-wc="${t.id}" rows="8" placeholder="Write your mission response here…">${esc(drafts[t.id] || "")}</textarea></label>
       <small class="muted" id="wc_${t.id}">${wc(drafts[t.id] || "")}/300 words</small><br><button data-act="sub" data-id="${t.id}">Submit proof</button>`;
-    return `<div class="task"><b>${ICON[ty]} ${esc(t.title)}</b> <span class="badge">+${t.xp} XP</span> ${due}${t.status === "rejected" ? `<br><small class="err">Sent back — try again!</small>` : ""}${t.desc ? `<p class="desc">${esc(t.desc)}</p>` : ""}<div style="margin-top:8px">${body}</div></div>`;
+    return `<div class="task"><b>${ICON[ty]} ${esc(t.title)}</b> <span class="badge">+${t.xp} XP</span> ${due}${t.status === "rejected" ? `<br><small class="err">Sent back — try again!</small>` : ""}${t.desc ? `<div class="desc"><b>📖 Mission instructions</b><br>${esc(t.desc)}</div>` : ty === "text" ? `<p class="muted"><small>No written instructions were added to this mission.</small></p>` : ""}<div style="margin-top:8px">${body}</div></div>`;
   };
 
   const ownerTasks = () => {
@@ -422,7 +433,7 @@ function roomView(id) {
       if (ty === "quiz") { const a = secrets[t.id]; ev = `<br>${esc(t.proof)} ${a === undefined ? "" : a === t.choice ? `<span class="badge approved">✅ correct</span>` : `<span class="badge rejected">❌ wrong — correct: ${esc((t.options || [])[a] || "")}</span>`}`; }
       else if (ty === "puzzle" || ty === "candy") ev = `<br>${ICON[ty]} ${esc(t.proof)}`;
       else ev = `<br>“${esc(t.proof)}”<br>${proofs[t.id] ? `<img class="ph" src="${proofs[t.id]}" alt="proof photo">` : `<small class="muted">(loading photo…)</small>`}`;
-      return `<div class="task"><b>${TYPES[ty]} · ${esc(t.title)}</b> <span class="badge">+${t.xp} XP</span><br><small class="muted">${esc(t.assigneeName)} submitted:</small>${ev}
+      return `<div class="task"><b>${TYPES[ty]} · ${esc(t.title)}</b> <span class="badge">+${t.xp} XP</span>${t.desc ? `<details><summary>📖 Mission instructions</summary><div class="desc">${esc(t.desc)}</div></details>` : ""}<small class="muted">${esc(t.assigneeName)} submitted:</small>${ev}
         <div class="row" style="margin-top:8px"><button data-act="ok" data-id="${t.id}">Approve</button><button class="alt" data-act="no" data-id="${t.id}">Send back</button></div></div>`;
     }).join("") : `<p class="muted">Nothing waiting for review.</p>`;
   };
