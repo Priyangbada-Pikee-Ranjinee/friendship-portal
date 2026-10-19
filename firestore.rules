@@ -10,7 +10,7 @@ service cloud.firestore {
     match /rooms/{r} {
       allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid;
       allow read: if isMember(r);
-      allow update: if isOwner(r);
+      allow update, delete: if isOwner(r);
 
       match /members/{u} {
         allow read: if isMember(r) || (signedIn() && request.auth.uid == u);
@@ -19,11 +19,15 @@ service cloud.firestore {
           get(/databases/$(database)/documents/rooms/$(r)/invites/$(request.resource.data.token)).data.active == true);
         allow update: if isOwner(r) || (signedIn() && request.auth.uid == u &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','avatar']));
+        allow delete: if isOwner(r);
       }
       match /invites/{t} {
         allow get: if signedIn();
         allow create: if willBeMember(r);
         allow update, delete: if isOwner(r);
+      }
+      match /secrets/{t} {
+        allow read, write: if isOwner(r);
       }
       match /proofs/{t} {
         allow read: if isOwner(r) || (isMember(r) && resource.data.by == request.auth.uid);
@@ -36,13 +40,16 @@ service cloud.firestore {
       }
       match /tasks/{t} {
         allow read: if isMember(r);
-        allow create: if isOwner(r) && request.resource.data.status == 'todo';
+        allow create: if isOwner(r) && request.resource.data.status == 'todo'
+          && request.resource.data.type in ['text','quiz','puzzle','candy']
+          && (!('desc' in request.resource.data) || request.resource.data.desc.size() <= 3000);
         allow delete: if isOwner(r);
         allow update: if isOwner(r) || (isMember(r) && resource.data.assignee == request.auth.uid
           && resource.data.status in ['todo','rejected']
           && request.resource.data.status == 'submitted'
-          && request.resource.data.proof.size() >= 3
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','proof']));
+          && request.resource.data.proof.size() >= 3 && request.resource.data.proof.size() <= 3000
+          && (resource.data.get('deadline', 0) == 0 || request.time.toMillis() <= resource.data.deadline)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','proof','choice']));
       }
     }
     match /users/{u} { allow read, write: if signedIn() && request.auth.uid == u; }
