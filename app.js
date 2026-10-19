@@ -156,6 +156,7 @@ function homeView() {
 const TYPES = { text: "✍️ Writing + photo", quiz: "❓ Quiz", puzzle: "🧩 Puzzle", candy: "🍬 Candy Match" };
 const ICON = { text: "✍️", quiz: "❓", puzzle: "🧩", candy: "🍬" };
 const EM = ["🌸", "🍓", "⭐", "🎀", "🍰", "🦋", "🌙", "💎"];
+const quizQs = t => t.questions || [{ q: t.question || "", options: t.options || [] }];
 const wc = s => s.trim().split(/\s+/).filter(Boolean).length;
 const isLate = t => t.deadline > 0 && Date.now() > t.deadline;
 const fmtDue = t => {
@@ -271,9 +272,7 @@ function roomView(id) {
       <label>Mission type<select id="ty"><option value="text">${TYPES.text}</option><option value="quiz">${TYPES.quiz}</option><option value="puzzle">${TYPES.puzzle} (Memory Match)</option><option value="candy">${TYPES.candy} (match-3 game)</option></select></label>
       <label>Mission title<input id="tt" required maxlength="80" placeholder="Send me a voice note cheering me up"></label>
       <label>Mission description — explain what to do (up to 300 words)<textarea id="td" rows="5" placeholder="Describe the mission clearly: what to do, what the photo should show, anything else the friend needs to know…"></textarea></label><small class="muted" id="tdc">0/300 words</small>
-      <div id="qz" hidden><label>Quiz question<input id="qq" maxlength="140"></label>
-        ${"ABCD".split("").map(l => `<label>Option ${l}<input class="qo" maxlength="80"></label>`).join("")}
-        <label>Correct answer<select id="qa"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label></div>
+      <div id="qz" hidden><div id="qlist"></div><button type="button" class="alt" id="addq">+ Add question</button></div>
       <div id="cn" hidden class="row"><label style="flex:1">Target score<input id="cg" type="number" min="50" max="2000" value="300"></label><label style="flex:1">Moves allowed<input id="cm" type="number" min="5" max="60" value="20"></label></div>
       <div class="row"><label style="flex:1">Assign to<select id="sel"></select></label><label style="flex:1">XP reward<input id="tx" type="number" min="1" max="100" value="20"></label></div>
       <label>Deadline (optional)<input id="dl" type="datetime-local"></label>
@@ -319,20 +318,29 @@ function roomView(id) {
         $("#eerr").textContent = "";
         try { await F.updateDoc(F.doc(db, "rooms", id), { title: $("#et").value.trim(), theme: $("#eth").value, ranks }); toast("Room updated ✨"); } catch (x) { toast(x.message); }
       };
+      const qHtml = (d = {}) => `<div class="qblock card"><div class="row between"><b class="qn"></b><button type="button" class="alt" data-rmq>Remove</button></div>
+        <label>Question<input class="qq" maxlength="140" value="${esc(d.q || "")}"></label>${[0, 1, 2, 3].map(k => `<label>Option ${"ABCD"[k]}<input class="qo" maxlength="80" value="${esc((d.options || [])[k] || "")}"></label>`).join("")}
+        <label>Correct answer<select class="qa">${[0, 1, 2, 3].map(k => `<option value="${k}" ${d.a === k ? "selected" : ""}>${"ABCD"[k]}</option>`).join("")}</select></label></div>`;
+      const numQ = () => root.querySelectorAll(".qblock .qn").forEach((n, k) => n.textContent = `Question ${k + 1}`);
+      const setQs = list => { $("#qlist").innerHTML = (list.length ? list : [{}]).map(qHtml).join(""); numQ(); };
+      $("#addq").onclick = () => { if (root.querySelectorAll(".qblock").length >= 10) return toast("Up to 10 questions per quiz"); $("#qlist").insertAdjacentHTML("beforeend", qHtml()); numQ(); };
+      $("#qlist").onclick = e => { const b = e.target.closest("[data-rmq]"); if (b && root.querySelectorAll(".qblock").length > 1) { b.closest(".qblock").remove(); numQ(); } };
+      setQs([]);
       const readMission = () => {
         const type = $("#ty").value, title = $("#tt").value.trim(), desc = $("#td").value.trim();
         const xp = Math.min(100, Math.max(1, +$("#tx").value || 20)), dl = $("#dl").value ? new Date($("#dl").value).getTime() : 0;
         if (!title) { toast("Give the mission a title ✍️"); return null; }
         if (type === "text" && wc(desc) < 5) { toast("Explain the mission in at least 5 words ✍️"); return null; }
-        let extra = {}, answer = 0;
+        let extra = {}, answers = [];
         if (type === "quiz") {
-          const options = [...root.querySelectorAll(".qo")].map(x => x.value.trim()), question = $("#qq").value.trim();
-          if (!question || options.some(o => !o)) { toast("Fill in the question and all 4 options ❓"); return null; }
-          extra = { question, options }; answer = +$("#qa").value;
+          const blocks = [...root.querySelectorAll(".qblock")];
+          const questions = blocks.map(b => ({ q: b.querySelector(".qq").value.trim(), options: [...b.querySelectorAll(".qo")].map(x => x.value.trim()) }));
+          if (questions.some(x => !x.q || x.options.some(o => !o))) { toast("Fill in every question and all 4 options ❓"); return null; }
+          extra = { questions }; answers = blocks.map(b => +b.querySelector(".qa").value);
         } else if (type === "candy") extra = { goal: Math.min(2000, Math.max(50, +$("#cg").value || 300)), moves: Math.min(60, Math.max(5, +$("#cm").value || 20)) };
-        return { type, title, desc, xp, dl, extra, answer };
+        return { type, title, desc, xp, dl, extra, answers };
       };
-      const tpl = m => ({ title: m.title, type: m.type, xp: m.xp, desc: m.desc, ...m.extra, ...(m.type === "quiz" ? { answer: m.answer } : {}), saved: F.serverTimestamp() });
+      const tpl = m => ({ title: m.title, type: m.type, xp: m.xp, desc: m.desc, ...m.extra, ...(m.type === "quiz" ? { answers: m.answers } : {}), saved: F.serverTimestamp() });
       $("#sv").onclick = async () => {
         const m = readMission(); if (!m) return;
         try { await F.addDoc(F.collection(db, "users", user.uid, "templates"), tpl(m)); toast("Saved to your library 📚"); } catch (x) { toast(x.message); }
@@ -344,7 +352,7 @@ function roomView(id) {
         const t = lib.find(x => x.id === u.dataset.use); if (!t) return;
         $("#ty").value = t.type || "text"; $("#ty").onchange();
         $("#tt").value = t.title; $("#td").value = t.desc || ""; $("#td").oninput(); $("#tx").value = t.xp || 20;
-        if (t.type === "quiz") { $("#qq").value = t.question || ""; root.querySelectorAll(".qo").forEach((x, k) => x.value = (t.options || [])[k] || ""); $("#qa").value = t.answer || 0; }
+        if (t.type === "quiz") setQs(t.questions ? t.questions.map((x, k) => ({ q: x.q, options: x.options, a: (t.answers || [])[k] })) : [{ q: t.question, options: t.options, a: t.answer }]);
         if (t.type === "candy") { $("#cg").value = t.goal || 300; $("#cm").value = t.moves || 20; }
         $("#af").scrollIntoView({ behavior: "smooth" }); toast("Loaded 📚 Choose who gets it, set a deadline, then assign.");
       };
@@ -358,7 +366,7 @@ function roomView(id) {
         targets.forEach(m => {
           const ref = F.doc(F.collection(db, "rooms", id, "tasks"));
           b.set(ref, { title: m0.title, type: m0.type, xp: m0.xp, desc: m0.desc, deadline: m0.dl, assignee: m.id, assigneeName: m.name, status: "todo", proof: "", created: F.serverTimestamp(), ...m0.extra });
-          if (m0.type === "quiz") b.set(F.doc(db, "rooms", id, "secrets", ref.id), { answer: m0.answer });
+          if (m0.type === "quiz") b.set(F.doc(db, "rooms", id, "secrets", ref.id), { answers: m0.answers });
         });
         if ($("#sk").checked) b.set(F.doc(F.collection(db, "users", user.uid, "templates")), tpl(m0));
         try { await b.commit(); $("#tt").value = ""; $("#td").value = ""; $("#tdc").textContent = "0/300 words"; $("#sk").checked = false; toast("Mission assigned 🎯"); } catch (x) { toast(x.message); }
@@ -389,9 +397,10 @@ function roomView(id) {
           delete drafts[t.id]; openId = null;
           popup({ mood: "happy", tag: "PROOF SENT", title: "Nice work! 💌", text: "Your proof is with the Room Owner. Fingers crossed! 🤞", btn: "Okay!" });
         } else if (a === "quiz") {
-          const ch = root.querySelector(`input[name="q_${t.id}"]:checked`); if (!ch) return toast("Pick an answer first 🎯");
+          const qs = quizQs(t), picks = qs.map((_, n) => root.querySelector(`input[name="q_${t.id}_${n}"]:checked`));
+          if (picks.some(p => !p)) return toast("Answer every question first 🎯");
           if (isLate(t)) return toast("⌛ This mission has expired");
-          await F.updateDoc(ref, { status: "submitted", proof: `Answered: ${t.options[+ch.value]}`, choice: +ch.value }); openId = null;
+          await F.updateDoc(ref, { status: "submitted", proof: `Answered ${qs.length} question${qs.length > 1 ? "s" : ""}`, choices: picks.map(p => +p.value) }); openId = null;
           popup({ mood: "happy", tag: "ANSWER LOCKED IN", title: "Good luck! 🍀", text: "The Room Owner will check your answer.", btn: "Okay!" });
         } else if (a === "ok") {
           const w = F.writeBatch(db); w.update(ref, { status: "approved" });
@@ -413,7 +422,7 @@ function roomView(id) {
       unsubs.push(F.onSnapshot(F.collection(db, "rooms", id, "proofs"), s => {
         proofs = {}; s.docs.forEach(d => { const ph = d.data().photo; if (typeof ph === "string" && ph.startsWith("data:image/jpeg;base64,")) proofs[d.id] = ph; }); paint();
       }));
-      unsubs.push(F.onSnapshot(F.collection(db, "rooms", id, "secrets"), s => { secrets = {}; s.docs.forEach(d => secrets[d.id] = d.data().answer); paint(); }));
+      unsubs.push(F.onSnapshot(F.collection(db, "rooms", id, "secrets"), s => { secrets = {}; s.docs.forEach(d => secrets[d.id] = d.data().answers || [d.data().answer]); paint(); }));
     }
     unsubs.push(F.onSnapshot(F.collection(db, "rooms", id, "tasks"), s => { tasks = s.docs.map(d => ({ id: d.id, ...d.data() })); react(); notifyNew(); paint(); }));
   };
@@ -449,7 +458,7 @@ function roomView(id) {
     if (isLate(t)) return `<div class="task locked">⌛ ${esc(t.title)} ${due}<br><small class="err">Mission expired.</small>${more}</div>`;
     let body;
     if (openId !== t.id) body = `<button class="gold" data-act="start" data-id="${t.id}">Start mission ▶</button>`;
-    else if (ty === "quiz") body = `<p><b>${esc(t.question || "")}</b></p>${(t.options || []).map((o, i) => `<label class="opt"><input type="radio" name="q_${t.id}" value="${i}"> ${"ABCD"[i]}. ${esc(o)}</label>`).join("")}<button data-act="quiz" data-id="${t.id}">Lock in answer</button>`;
+    else if (ty === "quiz") body = `${quizQs(t).map((x, n) => `<div class="qcard"><p><b>${n + 1}. ${esc(x.q)}</b></p>${x.options.map((o, i) => `<label class="opt"><input type="radio" name="q_${t.id}_${n}" value="${i}"> ${"ABCD"[i]}. ${esc(o)}</label>`).join("")}</div>`).join("")}<button data-act="quiz" data-id="${t.id}">Lock in answers</button>`;
     else if (ty === "candy") body = `<p class="muted">Tap a candy, then a neighbour to swap. Match 3+ to score ${t.goal || 300} points in ${t.moves || 20} moves!</p><div id="game_${t.id}"></div>`;
     else if (ty === "puzzle") body = `<p class="muted">Match all the pairs! Your result is sent automatically.</p><div id="game_${t.id}"></div>`;
     else body = `<label>📸 Photo proof (required)<input type="file" accept="image/*" id="f_${t.id}"></label>
@@ -462,7 +471,11 @@ function roomView(id) {
     const pend = tasks.filter(t => t.status === "submitted");
     $("#tasks").innerHTML = pend.length ? pend.map(t => {
       const ty = t.type || "text"; let ev;
-      if (ty === "quiz") { const a = secrets[t.id]; ev = `<br>${esc(t.proof)} ${a === undefined ? "" : a === t.choice ? `<span class="badge approved">✅ correct</span>` : `<span class="badge rejected">❌ wrong — correct: ${esc((t.options || [])[a] || "")}</span>`}`; }
+      if (ty === "quiz") {
+        const ans = secrets[t.id] || [], ch = t.choices || [t.choice], qs = quizQs(t); let ok = 0;
+        const lines = qs.map((x, n) => { const good = ans[n] === ch[n]; if (good) ok++; return `<li>${esc(x.q)}<br><small>Chose: ${esc(x.options[ch[n]] ?? "—")} ${ans[n] === undefined ? "" : good ? `<span class="badge approved">✅</span>` : `<span class="badge rejected">❌ correct: ${esc(x.options[ans[n]] ?? "")}</span>`}</small></li>`; }).join("");
+        ev = `<br><b>Score: ${ans.length ? ok + "/" + qs.length : "…"}</b><ol class="log">${lines}</ol>`;
+      }
       else if (ty === "puzzle" || ty === "candy") ev = `<br>${ICON[ty]} ${esc(t.proof)}`;
       else ev = `<br>“${esc(t.proof)}”<br>${proofs[t.id] ? `<img class="ph" src="${proofs[t.id]}" alt="proof photo">` : `<small class="muted">(loading photo…)</small>`}`;
       return `<div class="task"><b>${TYPES[ty]} · ${esc(t.title)}</b> <span class="badge">+${t.xp} XP</span>${t.desc ? `<details><summary>📖 Mission instructions</summary><div class="desc">${esc(t.desc)}</div></details>` : ""}<small class="muted">${esc(t.assigneeName)} submitted:</small>${ev}
